@@ -1,0 +1,209 @@
+version: 1
+key: new_equipment_install
+name: "New Equipment Installation"
+description: "Install new equipment in the a datacenter location."
+category: "Datacenter"
+manual_duration_minutes: 60
+ai:
+  category: provisioning
+  aliases:
+    - install new equipment
+    - new equipment install
+    - rack new hardware
+  examples:
+    - Install new equipment in Amsterdam
+    - Rack a new server in the datacenter
+  tags:
+    - datacenter
+    - provisioning
+    - installation
+  risk_level: medium
+  estimated_runtime_minutes: 20
+  composable: true
+inputs:
+  # Standard Change Inputs
+  {% include "templates/inputs/standard_change_inputs.yaml" %}
+
+  # Additional Inputs for New Equipment Installation
+  - key: request_type
+    label: Request Type
+    type: choice
+    choices:
+      - { value: permanent, label: "Permanent New Installation" }
+      - { value: reservation, label: "90-Day Reservation" }
+      - { value: move, label: "Move Existing Equipment" }
+      - { value: decommission, label: "Decommission Existing Equipment" }
+
+  - key: manufacturer
+    label: Manufacturer
+    type: object
+    model: dcim.Manufacturer
+    required: true
+
+  - key: model
+    label: Model
+    type: object
+    model: dcim.DeviceType
+    required: true
+    depends_on: ["manufacturer"]
+    filter:
+      query: { "manufacturer_id": "{{ inputs.manufacturer.id }}" }
+
+  - key: serial_number
+    label: Device Serial Number
+    type: string
+    required: true
+    validators:
+      - regex: "^[A-Za-z0-9._/-]{1,64}$"
+        message: "Use letters/digits and . _ - / (max 64 chars)."
+    show_if:
+      request_type: permanent
+
+  - key: hostname
+    label: Hostname
+    type: string
+    required: true
+    validators:
+      - regex: "^[A-Za-z0-9._/-]{1,64}$"
+        message: "Use letters/digits and . _ - / (max 64 chars)."
+    show_if:
+      request_type: permanent
+
+  - key: device
+    label: Device
+    type: object
+    model: dcim.Device
+    required: true
+    depends_on: ["manufacturer", "model"]
+    filter:
+      query:
+        {
+          "device_type__manufacturer_id": "{{ inputs.manufacturer.id }}",
+          "device_type__model": "{{ inputs.model.model }}",
+        }
+    show_if:
+      request_type:
+        - move
+        - decommission
+
+  - key: poc
+    label: Point of Contact
+    type: string
+    required: true
+    validators:
+      - regex: "^[A-Za-z ]{4,64}$"
+        message: "Full Name of Point of Contact (4-64 chars, letters and spaces only)."
+
+  - key: poc_email
+    label: Point of Contact Email
+    type: string
+    required: true
+    validators:
+      - regex: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        message: "Use a valid email address."
+
+  - key: support_email
+    label: Support Email
+    type: string
+    required: true
+    validators:
+      - regex: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        message: "Use a valid email address."
+
+  - key: location_method
+    label: Location Selection Method
+    type: choice
+    choices:
+      - { value: auto, label: "Automatic Selection" }
+      - { value: manual, label: "Manual Selection" }
+    required: true
+    show_if:
+      request_type:
+        - permanent
+        - move
+        - reservation
+
+  - key: location
+    label: Location
+    type: object
+    model: dcim.Location
+    required: true
+    filter:
+      query: { "location_type__name__in": ["Floor", "Cage"] }
+    show_if:
+      request_type:
+        - permanent
+        - move
+        - reservation
+
+  - key: rack
+    label: Rack
+    type: object
+    model: dcim.Rack
+    required: true
+    depends_on: ["location", "location_method"]
+    filter:
+      query: { "location": "{{ inputs.location.id }}" }
+    show_if:
+      location_method: manual
+      request_type:
+        - permanent
+        - move
+        - reservation
+
+  - key: position
+    label: Position (Available Units)
+    type: choice
+    depends_on: ["rack", "model"]
+    choices: |
+      [
+        {% for unit in inputs.rack | available_rack_units(inputs.model) %}
+        {"value": "{{ unit }}", "label": "RU-{{ unit }}"}{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    required: true
+    show_if:
+      location_method: manual
+      request_type:
+        - permanent
+        - move
+        - reservation
+
+  - key: face
+    label: Install Facing
+    type: choice
+    required: true
+    choices:
+      - { value: front, label: "Front" }
+      - { value: back, label: "Back" }
+    show_if:
+      location_method: manual
+      request_type:
+        - permanent
+        - move
+        - reservation
+
+  - key: comments
+    label: Comments
+    type: string
+    required: false
+    help_text: "Additional comments or instructions for the action."
+
+actions:
+  - type: nautobot
+    name: do_nothing
+    script: scripts/do_nothing.py
+    with:
+      manufacturer: "{{ inputs.manufacturer.id }}"
+      model: "{{ inputs.model.id }}"
+      request_type: "{{ inputs.request_type }}"
+      change_id: "{{ inputs.change_id }}"
+      serial_number: "{{ inputs.serial_number }}"
+      hostname: "{{ inputs.hostname }}"
+      poc: "{{ inputs.poc }}"
+      support_email: "{{ inputs.support_email }}"
+      location: "{{ inputs.location.id }}"
+      location_method: "{{ inputs.location_method }}"
+      rack: "{{ inputs.rack.id }}"
+      position: "{{ inputs.position }}"
+      face: "{{ inputs.face }}"

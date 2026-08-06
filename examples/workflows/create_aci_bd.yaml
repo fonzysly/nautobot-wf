@@ -1,0 +1,104 @@
+version: 1
+key: create_aci_bd
+name: "Create ACI Bridge Domain"
+description: "Create a new ACI Bridge Domain in a specified Tenant."
+category: "ACI"
+manual_duration_minutes: 60
+inputs:
+  - key: controller
+    label: Controller
+    type: object
+    model: dcim.Controller
+    required: true
+
+  - key: tenant
+    label: Tenant
+    type: object
+    model: tenancy.Tenant
+    required: true
+    depends_on: ["controller"]
+    filter:
+      query: { "tenant_group__name": "{{ inputs.controller.name }}" }
+
+  - key: vrf
+    label: VRF
+    type: object
+    model: ipam.VRF
+    required: true
+    depends_on: ["tenant"]
+    filter:
+      query: { "tenant_id": "{{ inputs.tenant.id }}" }
+
+  - key: app_action
+    label: Application Profile actions
+    type: choice
+    choices:
+      - { value: create, label: "Create New" }
+      - { value: existing, label: "Use Existing" }
+
+  - key: app_name
+    label: Application Profile Name
+    type: string
+    required: true
+    validators:
+      # allow common interface naming: letters/digits + - _ . / (e.g., Gi0/1, Ethernet1/1, xe-0/0/0)
+      - regex: "^[A-Za-z0-9._/-]{1,64}$"
+        message: "Use letters/digits and . _ - / (max 64 chars)."
+    show_if:
+      app_action: create
+
+  - key: bd_name
+    label: Bridge Domain Name
+    type: string
+    required: true
+    validators:
+      - regex: "^[A-Za-z0-9._/-]{1,64}$"
+        message: "Use letters/digits and . _ - / (max 64 chars)."
+
+  - key: create_epg
+    label: Create EPG?
+    type: boolean
+    default: false
+    description: "Create a new EPG in the specified Application Profile."
+
+  - key: enable_routing
+    label: Enable Routing?
+    type: boolean
+    default: false
+    description: "Enable unicast routing for the new Bridge Domain."
+
+  - key: gateway_address
+    label: Gateway Address
+    type: string
+    required: true
+    depends_on: ["enable_routing"]
+    show_if:
+      enable_routing: true
+    validators:
+      - regex: '^(?:(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)(?:/(?:3[0-2]|[12]?\\d))?$'
+        message: "Enter IPv4 with CIDR notation (e.g., 192.0.2.1/24)."
+
+actions:
+  - type: nautobot
+    name: get_ap_name
+    script: scripts/aci_get_ap_name.py
+    with:
+      vrf: "{{ inputs.vrf.id }}"
+      tenant: "{{ inputs.tenant.id }}"
+    when: "{{ inputs.app_action == 'existing' }}"
+
+  - type: awx
+    name: create_aci_bd
+    template_id: 232
+    extra_vars:
+      controller: "{{ inputs.controller.name }}"
+      tenant: "{{ inputs.tenant.name.split(':')[-1] }}"
+      vrf: "{{ inputs.vrf.name }}"
+      app_action: "{{ inputs.app_action }}"
+      app_name: "{% if inputs.app_action == 'create' %}{{ inputs.app_name }}{% else %}{{ results.get_ap_name.return_value }}{% endif %}"
+      bd_name: "{{ inputs.bd_name }}"
+      create_epg: "{{ inputs.create_epg }}"
+      enable_routing: "{{ inputs.enable_routing }}"
+      gateway_address: "{% if inputs.enable_routing and inputs.gateway_address %}{{ inputs.gateway_address }}{% else %}{% endif %}"
+      cidr: "{% if inputs.enable_routing and inputs.gateway_address %}{{ inputs.gateway_address.split('/')[-1] }}{% else %}{% endif %}"
+    monitor: true
